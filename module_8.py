@@ -638,6 +638,400 @@ def _render_strategy_details_tab(report: StrategyReport) -> None:
             _render_single_result_block(report.strategy_type, model_name, report.second_level_results[model_name])
 
 
+
+
+# =========================================================
+# Practical prediction helpers
+# =========================================================
+def _session_ready_for_prediction() -> tuple[bool, list[str]]:
+    required = [
+        "split_ready",
+        "preprocessor",
+        "feature_cols",
+        "X_raw",
+        "first_level_models",
+        "first_level_results",
+        "second_level_models",
+        "second_level_results",
+        "second_level_params",
+        "meta_full_train_models",
+        "meta_generation_params",
+        "strategy_type",
+        "Q1",
+        "Q3",
+    ]
+    missing = [key for key in required if key not in st.session_state]
+    if missing:
+        return False, missing
+    if not st.session_state.get("split_ready", False):
+        return False, ["split_ready"]
+    if not st.session_state.get("meta_ready", False):
+        return False, ["meta_ready"]
+    return True, []
+
+
+def _available_prediction_models() -> list[str]:
+    first = list(st.session_state.get("first_level_models", {}).keys())
+    second = list(st.session_state.get("second_level_results", {}).keys())
+    ordered = []
+    for name in first + second:
+        if name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
+def _primary_metric_key_for_strategy(strategy_type: str) -> str:
+    return "F1_weighted" if strategy_type == CLASSIFICATION_STRATEGY else "F1_weighted_after_discretization"
+
+
+def _result_store_for_model(model_name: str) -> dict[str, Any]:
+    if model_name in st.session_state.get("second_level_results", {}):
+        return st.session_state.second_level_results[model_name]
+    return st.session_state.get("first_level_results", {}).get(model_name, {})
+
+
+def _auto_select_best_live_model(strategy_type: str) -> tuple[Optional[str], Optional[float]]:
+    metric_key = _primary_metric_key_for_strategy(strategy_type)
+    candidates = {}
+    for name, result in st.session_state.get("first_level_results", {}).items():
+        candidates[name] = _safe_float(result.get(metric_key))
+    for name, result in st.session_state.get("second_level_results", {}).items():
+        candidates[name] = _safe_float(result.get(metric_key))
+    candidates = {k: v for k, v in candidates.items() if v is not None}
+    if not candidates:
+        return None, None
+    best_name = max(candidates, key=candidates.get)
+    return best_name, candidates[best_name]
+
+
+def _fix_final_model(model_name: str) -> None:
+    strategy_type = st.session_state.get("strategy_type")
+    metric_key = _primary_metric_key_for_strategy(strategy_type)
+    result = _result_store_for_model(model_name)
+    st.session_state.final_model_spec = {
+        "strategy_type": strategy_type,
+        "model_name": model_name,
+        "metric_key": metric_key,
+        "metric_value": _safe_float(result.get(metric_key)),
+    }
+
+
+def _ensure_default_final_model() -> None:
+    spec = st.session_state.get("final_model_spec")
+    current_strategy = st.session_state.get("strategy_type")
+    if isinstance(spec, dict) and spec.get("strategy_type") == current_strategy and spec.get("model_name") in _available_prediction_models():
+        return
+    best_name, _ = _auto_select_best_live_model(current_strategy)
+    if best_name is not None:
+        _fix_final_model(best_name)
+
+
+def _default_value_for_feature(df: pd.DataFrame, column: str) -> Any:
+    series = df[column] if column in df.columns else pd.Series(dtype=float)
+    non_na = series.dropna()
+    if non_na.empty:
+        return 0.0 if pd.api.types.is_numeric_dtype(series) else ""
+    if pd.api.types.is_numeric_dtype(series):
+        return float(non_na.median())
+    mode = non_na.mode(dropna=True)
+    if not mode.empty:
+        return mode.iloc[0]
+    return non_na.iloc[0]
+
+
+def _render_student_input_form(feature_cols: list[str], X_raw: pd.DataFrame) -> pd.DataFrame:
+    st.markdown("**Введення ознак нового студента**")
+    defaults = {col: _default_value_for_feature(X_raw, col) for col in feature_cols}
+    values: dict[str, Any] = {}
+
+    with st.form("student_rating_prediction_form"):
+        cols = st.columns(2)
+        for idx, feature in enumerate(feature_cols):
+            container = cols[idx % 2]
+            series = X_raw[feature] if feature in X_raw.columns else pd.Series(dtype=float)
+            default = defaults[feature]
+
+            with container:
+                if pd.api.types.is_numeric_dtype(series):
+                    min_val = float(series.min()) if not series.dropna().empty else 0.0
+                    max_val = float(series.max()) if not series.dropna().empty else max(1.0, float(default))
+                    step = 1.0 if pd.api.types.is_integer_dtype(series) else 0.1
+                    values[feature] = st.number_input(
+                        feature,
+                        value=float(default),
+                        step=step,
+                        min_value=min_val,
+                        max_value=max_val,
+                        key=f"predict_input_{feature}",
+                    )
+                else:
+                    options = [str(x) for x in pd.Series(series.dropna().astype(str).unique()).tolist()]
+                    if not options:
+                        options = [str(default)] if str(default) else [""]
+                    default_str = str(default)
+                    if default_str not in options:
+                        options = [default_str] + options
+                    default_index = options.index(default_str) if default_str in options else 0
+                    values[feature] = st.selectbox(
+                        feature,
+                        options=options,
+                        index=default_index,
+                        key=f"predict_input_{feature}",
+                    )
+
+        submitted = st.form_submit_button("Спрогнозувати рейтинг", use_container_width=True, type="primary")
+
+    if not submitted:
+        return pd.DataFrame()
+    return pd.DataFrame([values], columns=feature_cols)
+
+
+def _transform_student_row(raw_df: pd.DataFrame) -> pd.DataFrame:
+    preprocessor = st.session_state.preprocessor
+    transformed = preprocessor.transform(raw_df)
+    columns = st.session_state.get("feature_names_after_preprocessing")
+    return pd.DataFrame(transformed, columns=columns, index=raw_df.index)
+
+
+def _build_live_meta_features(X_prepared: pd.DataFrame) -> pd.DataFrame:
+    strategy_type = st.session_state.strategy_type
+    full_models = st.session_state.meta_full_train_models
+    meta_generation_params = st.session_state.get("meta_generation_params", {})
+    passthrough = bool(meta_generation_params.get("passthrough", False))
+
+    blocks = []
+    feature_names: list[str] = []
+    for model_name, model in full_models.items():
+        if strategy_type == CLASSIFICATION_STRATEGY:
+            proba = np.asarray(model.predict_proba(X_prepared), dtype=float)
+            class_labels = getattr(model, "classes_", np.arange(proba.shape[1]))
+            block_names = [f"meta_{model_name}_proba_{cls}" for cls in class_labels]
+            blocks.append(pd.DataFrame(proba, columns=block_names, index=X_prepared.index))
+            feature_names.extend(block_names)
+        else:
+            pred = np.asarray(model.predict(X_prepared), dtype=float).reshape(-1, 1)
+            block_names = [f"meta_{model_name}"]
+            blocks.append(pd.DataFrame(pred, columns=block_names, index=X_prepared.index))
+            feature_names.extend(block_names)
+
+    meta_df = pd.concat(blocks, axis=1) if blocks else pd.DataFrame(index=X_prepared.index)
+    if passthrough:
+        meta_df = pd.concat([X_prepared.reset_index(drop=True), meta_df.reset_index(drop=True)], axis=1)
+        meta_df.columns = list(X_prepared.columns) + feature_names
+        meta_df.index = X_prepared.index
+    return meta_df
+
+
+def _classification_from_final_model(model_name: str, X_prepared: pd.DataFrame, meta_features: pd.DataFrame) -> dict[str, Any]:
+    if model_name in st.session_state.get("first_level_models", {}):
+        model = st.session_state.first_level_models[model_name]
+        pred_cls = np.asarray(model.predict(X_prepared)).ravel()
+        proba = np.asarray(model.predict_proba(X_prepared), dtype=float) if hasattr(model, "predict_proba") else None
+        return {"predicted_class": int(pred_cls[0]), "probabilities": proba[0].tolist() if proba is not None else None}
+
+    if model_name == "SoftVoting":
+        weights = st.session_state.get("second_level_params", {}).get("SoftVoting", {}).get("weights")
+        full_models = list(st.session_state.meta_full_train_models.values())
+        probas = [np.asarray(model.predict_proba(X_prepared), dtype=float)[0] for model in full_models]
+        probas_np = np.vstack(probas)
+        if weights is None:
+            weights = np.ones(probas_np.shape[0], dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        avg_proba = np.average(probas_np, axis=0, weights=weights)
+        pred_cls = int(np.argmax(avg_proba))
+        return {"predicted_class": pred_cls, "probabilities": avg_proba.tolist()}
+
+    if model_name == "Stacking":
+        model = st.session_state.get("second_level_models", {}).get("Stacking")
+        pred_cls = np.asarray(model.predict(meta_features)).ravel()
+        proba = np.asarray(model.predict_proba(meta_features), dtype=float) if hasattr(model, "predict_proba") else None
+        return {"predicted_class": int(pred_cls[0]), "probabilities": proba[0].tolist() if proba is not None else None}
+
+    raise ValueError(f"Непідтримувана фінальна модель для класифікації: {model_name}")
+
+
+def _regression_from_final_model(model_name: str, X_prepared: pd.DataFrame, meta_features: pd.DataFrame) -> dict[str, Any]:
+    q1 = float(st.session_state.Q1)
+    q3 = float(st.session_state.Q3)
+
+    if model_name in st.session_state.get("first_level_models", {}):
+        model = st.session_state.first_level_models[model_name]
+        pred_cont = float(np.asarray(model.predict(X_prepared)).ravel()[0])
+    elif model_name == "Voting":
+        weights = st.session_state.get("second_level_params", {}).get("Voting", {}).get("weights")
+        preds = [float(np.asarray(model.predict(X_prepared)).ravel()[0]) for model in st.session_state.meta_full_train_models.values()]
+        preds_np = np.asarray(preds, dtype=float)
+        if weights is None:
+            weights = np.ones(preds_np.shape[0], dtype=float)
+        weights = np.asarray(weights, dtype=float)
+        pred_cont = float(np.average(preds_np, weights=weights))
+    elif model_name == "Stacking":
+        model = st.session_state.get("second_level_models", {}).get("Stacking")
+        pred_cont = float(np.asarray(model.predict(meta_features)).ravel()[0])
+    else:
+        raise ValueError(f"Непідтримувана фінальна модель для регресії: {model_name}")
+
+    pred_cls = int(0 if pred_cont <= q1 else 1 if pred_cont <= q3 else 2)
+    return {"predicted_score": pred_cont, "predicted_class": pred_cls}
+
+
+def _interpret_predicted_class(pred_cls: int) -> str:
+    mapping = {
+        0: "Низький рейтинг / рівень успішності",
+        1: "Середній рейтинг / рівень успішності",
+        2: "Високий рейтинг / рівень успішності",
+    }
+    return mapping.get(int(pred_cls), f"Клас {pred_cls}")
+
+
+def _run_live_student_prediction(raw_df: pd.DataFrame) -> dict[str, Any]:
+    _ensure_default_final_model()
+    final_spec = st.session_state.get("final_model_spec", {})
+    strategy_type = st.session_state.strategy_type
+    model_name = final_spec.get("model_name")
+
+    X_prepared = _transform_student_row(raw_df)
+    meta_features = _build_live_meta_features(X_prepared)
+
+    if strategy_type == CLASSIFICATION_STRATEGY:
+        prediction = _classification_from_final_model(model_name, X_prepared, meta_features)
+    else:
+        prediction = _regression_from_final_model(model_name, X_prepared, meta_features)
+
+    prediction.update(
+        {
+            "strategy_type": strategy_type,
+            "strategy_label": _strategy_label(strategy_type),
+            "model_name": model_name,
+            "model_label": _model_display_name(model_name),
+            "q1": _safe_float(st.session_state.get("Q1")),
+            "q3": _safe_float(st.session_state.get("Q3")),
+        }
+    )
+    return prediction
+
+
+def _render_final_model_lock_block() -> None:
+    _ensure_default_final_model()
+    strategy_type = st.session_state.get("strategy_type")
+    available_models = _available_prediction_models()
+    final_spec = st.session_state.get("final_model_spec", {})
+    current_name = final_spec.get("model_name")
+    current_index = available_models.index(current_name) if current_name in available_models else 0
+
+    st.markdown("**Вибір фінальної моделі**")
+    left, right = st.columns([1.6, 1])
+    with left:
+        selected = st.selectbox(
+            "Модель для практичного прогнозування",
+            options=available_models,
+            index=current_index,
+            format_func=_model_display_name,
+            key="module8_final_model_select",
+        )
+    with right:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("Зафіксувати модель", use_container_width=True):
+            _fix_final_model(selected)
+            st.success(f"Фінальну модель зафіксовано: {_model_display_name(selected)}")
+
+    auto_best_name, auto_best_value = _auto_select_best_live_model(strategy_type)
+    if auto_best_name is not None:
+        st.caption(
+            f"Автовибір за поточною стратегією: {_model_display_name(auto_best_name)} "
+            f"({_primary_metric_key_for_strategy(strategy_type)} = {_metric_value(auto_best_value)})"
+        )
+
+    final_spec = st.session_state.get("final_model_spec", {})
+    metric_key = final_spec.get("metric_key", _primary_metric_key_for_strategy(strategy_type))
+    metric_value = final_spec.get("metric_value")
+
+    
+    st.markdown(f"**Поточна стратегія:** {_strategy_label(strategy_type)}")
+    st.markdown(f"**Фінальна модель:** {_model_display_name(final_spec.get('model_name', '—'))}")
+    
+    st.metric(metric_key, _metric_value(metric_value) if metric_value is not None else "—")
+
+
+def _render_prediction_result(prediction: dict[str, Any]) -> None:
+    st.markdown("---")
+    st.markdown("## Результат прогнозування")
+
+    class_text = _interpret_predicted_class(int(prediction["predicted_class"]))
+    if prediction["strategy_type"] == CLASSIFICATION_STRATEGY:
+        st.markdown(f"**Стратегія:** {prediction['strategy_label']}")
+        st.markdown(f"**Фінальна модель:** {prediction['model_label']}")
+
+        st.metric("Прогнозований клас", str(prediction["predicted_class"]))
+        st.success(f"Інтерпретація прогнозу: **{class_text}**")
+        if prediction.get("probabilities") is not None:
+            probs = prediction["probabilities"]
+            
+            st.info(
+                "Пояснення до класів прогнозу: "
+                "0 — Low (низький рівень), "
+                "1 — Medium (середній рівень), "
+                "2 — High (високий рівень)."
+            )
+            prob_df = pd.DataFrame(
+                {
+                    "Клас": list(range(len(probs))),
+                    "Ймовірність": [round(float(p), 4) for p in probs],
+                }
+            )
+            st.dataframe(prob_df, use_container_width=True, hide_index=True)
+        return
+
+    st.markdown(f"**Поточна стратегія:** {prediction['strategy_label']}")
+    st.markdown(f"**Фінальна модель:** {prediction['model_label']}")
+
+    c1, c2 = st.columns(2)
+    
+    c1.metric("Прогнозований бал", _metric_value(prediction["predicted_score"], digits=2))
+    c2.metric("Прогнозований клас", str(prediction["predicted_class"]))
+    st.success(f"Інтерпретація прогнозу: **{class_text}**")
+
+    q1 = prediction.get("q1")
+    q3 = prediction.get("q3")
+    if q1 is not None and q3 is not None:
+        st.caption(f"Категоризація виконується за порогами Q1 = {_metric_value(q1, 2)} та Q3 = {_metric_value(q3, 2)}")
+
+
+def _render_student_rating_prediction_tab() -> None:
+    st.markdown("### Прогноз рейтингу студента")
+    st.write("Ця вкладка використовує поточні навчені моделі із session_state та дозволяє виконати практичний прогноз для нового студента.")
+
+    ready, missing = _session_ready_for_prediction()
+    if not ready:
+        st.warning(
+            "Практичний прогноз поки недоступний. Спочатку виконайте етапи попередньої обробки, навчання базових моделей, "
+            "генерації метаознак і навчання ансамблів другого рівня. "
+            f"Відсутні або неготові ключі: {', '.join(missing)}."
+        )
+        return
+
+    _render_final_model_lock_block()
+
+    feature_cols = st.session_state.get("feature_cols", [])
+    X_raw = st.session_state.get("X_raw")
+    if not feature_cols or X_raw is None:
+        st.warning("Не знайдено вихідних ознак для побудови форми введення нового студента.")
+        return
+
+    raw_df = _render_student_input_form(feature_cols, pd.DataFrame(X_raw))
+    if raw_df.empty:
+        st.info("Заповніть форму вище та натисніть кнопку прогнозування.")
+        return
+
+    try:
+        prediction = _run_live_student_prediction(raw_df)
+    except Exception as exc:
+        st.error(f"Не вдалося виконати прогнозування: {exc}")
+        return
+
+    st.session_state.module8_last_student_prediction = prediction
+    _render_prediction_result(prediction)
+
 # =========================================================
 # Public page
 # =========================================================
@@ -648,27 +1042,34 @@ def page_strategy_comparison() -> None:
     uploaded_files = _render_upload_section()
     classification_report, regression_report = _load_uploaded_reports(uploaded_files)
 
-    if len(uploaded_files) < 2:
-        st.info("Поки що не завантажено жодного файлу. Використайте кнопку вище для завантаження.")
-        return
-
-    if classification_report is None or regression_report is None:
-        st.warning("Не вдалося отримати JSON-файли стратегій.")
-        return
-
-    tab_compare, tab_cls, tab_reg = st.tabs(
+    tab_compare, tab_cls, tab_reg, tab_predict = st.tabs(
         [
             "Порівняння стратегій",
             "Класифікація",
             "Регресія",
+            "Прогноз рейтингу студента",
         ]
     )
 
     with tab_compare:
-        _render_cross_strategy_tab(classification_report, regression_report)
+        if len(uploaded_files) < 2:
+            st.info("Для міжстратегічного порівняння завантажте два JSON-файли окремо для класифікації та регресії.")
+        elif classification_report is None or regression_report is None:
+            st.warning("Не вдалося отримати коректні JSON-файли стратегій.")
+        else:
+            _render_cross_strategy_tab(classification_report, regression_report)
 
     with tab_cls:
-        _render_strategy_details_tab(classification_report)
+        if classification_report is None:
+            st.info("Завантажте JSON-звіт стратегії класифікації, щоб переглянути детальні результати.")
+        else:
+            _render_strategy_details_tab(classification_report)
 
     with tab_reg:
-        _render_strategy_details_tab(regression_report)
+        if regression_report is None:
+            st.info("Завантажте JSON-звіт стратегії регресії, щоб переглянути детальні результати.")
+        else:
+            _render_strategy_details_tab(regression_report)
+
+    with tab_predict:
+        _render_student_rating_prediction_tab()
