@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import streamlit as st
+
+
+ALL_PIPELINE_STATE_KEYS = [
+    "target_col",
+    "feature_cols",
+    "feature_names_after_preprocessing",
+    "preprocessing_config",
+    "preprocessor",
+    "X_raw",
+    "X_train_raw",
+    "X_test_raw",
+    "X",
+    "y",
+    "X_train",
+    "X_test",
+    "y_train",
+    "y_test",
+    "y_cont",
+    "y_train_cont",
+    "y_test_cont",
+    "y_train_cls",
+    "y_test_cls",
+    "Q1",
+    "Q3",
+    "test_size",
+    "random_state",
+    "stratify_used",
+    "split_ready",
+    "strategy_type",
+    "first_level_models",
+    "first_level_results",
+    "first_level_predictions",
+    "first_level_predictions_cls",
+    "first_level_params",
+    "first_level_strategy_type",
+    "optimization_results",
+    "optimization_mode",
+    "bo_init_points",
+    "bo_n_iter",
+    "meta_X_train",
+    "meta_X_test",
+    "meta_feature_names",
+    "meta_generation_params",
+    "meta_base_models",
+    "meta_full_train_models",
+    "meta_ready",
+    "meta_strategy_type",
+    "meta_cv_folds",
+    "meta_passthrough",
+    "second_level_models",
+    "second_level_model",
+    "second_level_results",
+    "second_level_predictions",
+    "second_level_predictions_cls",
+    "second_level_params",
+    "second_level_strategy_type",
+    "module9_prediction_model_select",
+    "module9_last_student_prediction",
+]
+
+
+def reset_all_pipeline_state() -> None:
+    for key in ALL_PIPELINE_STATE_KEYS:
+        st.session_state.pop(key, None)

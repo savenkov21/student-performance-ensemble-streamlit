@@ -1,35 +1,40 @@
-# Development of a Student Rating Evaluation Model Based on Ensemble Machine Learning Methods
+# Student Performance Prediction with Ensemble Machine Learning
 
-Streamlit-based application for student performance prediction, comparative analysis of ensemble learning strategies, and practical forecasting for new student records.
+Streamlit-based machine learning application for student performance prediction, ensemble model training, statistical comparison of model quality, and practical prediction for new student records.
 
 ## Overview
 
-This project implements an interactive web application for predicting student performance using ensemble machine learning methods. The system supports the full workflow of an applied machine learning study: data loading, preprocessing, visualization, hyperparameter optimization, training of first-level models, meta-feature generation, second-level ensemble learning, evaluation, comparison of alternative predictive strategies, and practical prediction for new students.
+The project implements an interactive end-to-end machine learning workflow for student performance modeling. It supports two alternative predictive strategies:
 
-The application is built around two predictive strategies:
+1. **Direct multiclass classification** — the continuous target is discretized into performance classes before model training.
+2. **Regression with subsequent categorization** — models predict a continuous performance score, which is then converted into classes using the `Q1` and `Q3` thresholds.
 
-1. **Direct multiclass classification** – the target variable is discretized into classes before model training.
-2. **Regression with subsequent categorization** – the model first predicts a continuous score, after which the result is transformed into categorical levels using threshold-based discretization.
+The application combines data preprocessing, Bayesian hyperparameter optimization, first-level models, ensemble learning, model evaluation, statistical analysis, cross-strategy comparison, and practical prediction in a single Streamlit interface.
 
-The project is intended for academic, research, and demonstration use in the domain of student performance modeling.
+The current codebase represents the refactored **v2.0** architecture of the project.
 
 ## Main Features
 
-- interactive data upload and primary dataset analysis;
-- preprocessing pipeline with target selection and train/test split formation;
+- interactive CSV upload and primary dataset analysis;
+- preprocessing and train/test split formation;
 - exploratory data visualization;
-- training of first-level base models;
-- meta-feature generation for ensemble learning;
-- training of second-level ensemble models;
-- Bayesian optimization of hyperparameters with cross-validation;
+- two predictive strategies: multiclass classification and regression with categorization;
+- Bayesian hyperparameter optimization with cross-validation;
+- first-level model training;
+- meta-feature generation;
+- second-level ensemble learning with voting and stacking;
 - evaluation using classification and regression metrics;
-- comparison of two predictive strategies in a unified interface;
-- JSON export/import of experimental results;
-- practical prediction for a new student record using the currently trained final model.
+- export and import of evaluation reports in JSON format;
+- confidence intervals for classification metrics;
+- paired statistical comparison of models;
+- McNemar tests with Holm correction for multiple comparisons;
+- paired stratified bootstrap confidence intervals for metric differences;
+- comparison of the two predictive strategies;
+- practical prediction for new student records.
 
-## Implemented Workflow
+## Application Workflow
 
-The Streamlit application consists of the following stages:
+The Streamlit application contains nine sequential stages:
 
 1. **Data loading and primary analysis**
 2. **Data preprocessing and split formation**
@@ -37,102 +42,137 @@ The Streamlit application consists of the following stages:
 4. **Training first-level base models**
 5. **Meta-feature generation**
 6. **Training second-level ensemble models**
-7. **Evaluation of model quality**
-8. **Comparison of strategies and practical prediction**
+7. **Model quality evaluation and JSON export**
+8. **Statistical analysis of classification results**
+9. **Strategy comparison and practical prediction**
 
-These stages are connected through a multi-page interface defined in `main.py`.
+Navigation is implemented in `main.py` with a custom Streamlit sidebar. The project intentionally uses the directory name `app_pages/` instead of Streamlit's special `pages/` directory to avoid duplicate automatic navigation.
+
+## Predictive Strategies
+
+### 1. Direct multiclass classification
+
+The continuous target is transformed into three performance classes before training. The base models are trained directly on the categorical target.
+
+Base models:
+
+- `RidgeClassifier`
+- `RandomForestClassifier`
+- `XGBClassifier`
+
+Second-level models:
+
+- Soft Voting
+- Stacking
+
+### 2. Regression with subsequent categorization
+
+The models first predict the continuous performance score. Predictions are then categorized using the same `Q1` and `Q3` thresholds used to define the target classes.
+
+Base models:
+
+- `Ridge`
+- `RandomForestRegressor`
+- `XGBRegressor`
+
+Second-level models:
+
+- Voting Regressor
+- Stacking Regressor
+
+## Hyperparameter Optimization
+
+Bayesian Optimization is used to select hyperparameters for the first-level models.
+
+- Classification strategy: `StratifiedKFold` cross-validation with F1 macro as the optimization criterion.
+- Regression strategy: cross-validation with negative mean squared error as the optimization criterion.
+
+## Model Evaluation
+
+### Classification metrics
+
+- Accuracy
+- Balanced Accuracy
+- F1 macro
+- F1 weighted
+- classification report
+- confusion matrix
+
+### Regression metrics
+
+- MAE
+- MSE
+- RMSE
+- R²
+
+Regression predictions are additionally categorized so that both predictive strategies can be compared using the same classification metrics.
+
+## Statistical Analysis
+
+The statistical analysis stage uses predictions generated for the same fixed test set. Evaluation reports include the information required to verify test-set alignment between strategies:
+
+- test-set fingerprint;
+- ordered test sample identifiers;
+- true class labels;
+- per-object predictions for every model;
+- categorization thresholds.
+
+Implemented statistical procedures include:
+
+- normal-approximation confidence interval for Accuracy;
+- stratified percentile bootstrap confidence intervals for Accuracy, Balanced Accuracy, F1 macro, and F1 weighted;
+- paired stratified bootstrap confidence intervals for differences between model metrics;
+- McNemar test for paired comparison of classification correctness;
+- exact two-sided binomial McNemar test for small discordant counts;
+- chi-square McNemar test with continuity correction otherwise;
+- Holm correction for multiple McNemar comparisons.
+
+Old evaluation JSON files that do not contain the statistical data block are not suitable for paired statistical analysis. Reports should be re-exported from the current evaluation stage.
 
 ## Project Structure
 
 ```text
 .
 ├── main.py
-├── module_1.py              # data loading and primary analysis
-├── module_2.py              # preprocessing and train/test split formation
-├── module_3.py              # visualization
-├── module_4.py              # first-level model training
-├── module_5.py              # meta-feature generation
-├── module_6.py              # second-level ensemble training
-├── module_7.py              # evaluation of results
-├── module_8.py              # strategy comparison, JSON-based analysis, practical prediction
-├── optimization_utils.py    # Bayesian optimization utilities
-├── Student_Performance.csv  # sample dataset
-└── README.md
+├── requirements.txt
+├── README.md
+├── .gitignore
+├── DataSet/
+│   └── Student_Performance.csv
+├── app_pages/
+│   ├── __init__.py
+│   ├── module_1.py
+│   ├── module_2.py
+│   ├── module_3.py
+│   ├── module_4.py
+│   ├── module_5.py
+│   ├── module_6.py
+│   ├── module_7.py
+│   ├── module_8.py
+│   └── module_9.py
+└── utils/
+    ├── __init__.py
+    ├── app_state.py
+    ├── session_state.py
+    ├── preprocessing_core.py
+    ├── preprocessing_ui.py
+    ├── visualization_helpers.py
+    ├── optimization_utils.py
+    ├── training_first_level_*.py
+    ├── metafeatures_*.py
+    ├── second_level_*.py
+    ├── evaluation_*.py
+    ├── statistical_analysis_*.py
+    └── strategy_comparison_*.py
 ```
 
-## Predictive Strategies
-
-### 1. Direct multiclass classification
-
-The continuous target is discretized into classes before model training. Classification models are then trained directly on the derived labels.
-
-### 2. Regression with subsequent categorization
-
-Regression models first predict a continuous student score. The output is then categorized into performance levels using predefined thresholds such as `Q1` and `Q3`.
-
-## Models and Methods
-
-### First-level models
-
-Depending on the selected strategy, the system uses base models such as:
-
-- `RandomForestClassifier` / `RandomForestRegressor`
-- `XGBClassifier` / `XGBRegressor`
-- `RidgeClassifier` / `Ridge`
-
-### Second-level ensemble models
-
-The project supports meta-level ensemble learning, including:
-
-- **Soft Voting / Voting**
-- **Stacking**
-
-### Hyperparameter optimization
-
-Bayesian Optimization is used for automatic hyperparameter search. Cross-validation is integrated into the optimization procedure.
-
-## Practical Prediction
-
-The application includes a dedicated interface for practical prediction of student performance based on the currently trained models.
-
-This functionality supports:
-
-- fixing the final model for inference;
-- manual input of a new student’s feature values;
-- automatic preprocessing of new data using the fitted preprocessing pipeline;
-- generation of final predictions:
-  - predicted class for the classification strategy;
-  - predicted score and categorized class for the regression strategy;
-- display of class probabilities for classification models.
-
-## Result Analysis
-
-The application supports:
-
-- comparison tables for base and ensemble models;
-- classification reports;
-- confusion matrices;
-- regression diagnostics (`MAE`, `MSE`, `RMSE`, `R²`);
-- `Actual vs Predicted` plots for regression models;
-- cross-strategy comparison based on final metrics.
-
-## Technologies
-
-- **Python**
-- **Streamlit**
-- **Pandas**
-- **NumPy**
-- **Scikit-learn**
-- **XGBoost**
-- **Matplotlib**
-- **Seaborn**
-- **bayesian-optimization**
+The `utils/` package separates computational logic, state management, report generation, constants, and UI helpers. This reduces the size of individual Streamlit page modules and makes the application easier to maintain and extend.
 
 ## Dataset
 
-The repository includes the dataset `Student_Performance.csv`, which is used for experiments on student performance prediction.
+The repository contains `DataSet/Student_Performance.csv`, which can be used to demonstrate the full workflow.
 
-Typical input features include:
+Input features include:
 
 - Hours Studied
 - Previous Scores
@@ -144,7 +184,22 @@ Target variable:
 
 - Performance Index
 
-## Installation
+The application also supports uploading a compatible CSV file through the interface.
+
+## Technologies
+
+- Python 3.12
+- Streamlit
+- Pandas
+- NumPy
+- SciPy
+- Scikit-learn
+- XGBoost
+- Bayesian Optimization
+- Matplotlib
+- Seaborn
+
+## Local Installation
 
 Clone the repository:
 
@@ -153,68 +208,69 @@ git clone https://github.com/savenkov21/student-performance-ensemble-streamlit.g
 cd student-performance-ensemble-streamlit
 ```
 
-Create and activate a virtual environment:
+Create a virtual environment:
 
 ```bash
-python -m venv venv
+python -m venv .venv
 ```
 
-Windows:
+Activate it on Windows:
 
 ```bash
-venv\Scripts\activate
+.venv\Scripts\activate
 ```
 
-macOS / Linux:
+Activate it on macOS/Linux:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
 ## Run the Application
 
 ```bash
-streamlit run main.py
+python -m streamlit run main.py
 ```
 
-## Recommended `requirements.txt`
+By default, Streamlit opens the local application at `http://localhost:8501`.
 
-```txt
-streamlit
-pandas
-numpy
-scikit-learn
-matplotlib
-seaborn
-xgboost
-bayesian-optimization
+## Streamlit Community Cloud
+
+Recommended deployment settings:
+
+```text
+Repository: savenkov21/student-performance-ensemble-streamlit
+Branch: main
+Main file path: main.py
+Python version: 3.12
 ```
 
-## Usage Scenario
+`requirements.txt` must remain in the repository root next to `main.py`. After changes are committed and pushed to the tracked GitHub branch, Streamlit Community Cloud can rebuild the application from the updated repository state.
 
-1. Upload and inspect the dataset.
-2. Perform preprocessing and create train/test splits.
-3. Train first-level models.
-4. Generate meta-features.
-5. Train second-level ensemble models.
-6. Evaluate model quality.
-7. Compare the two predictive strategies.
-8. Select the final model and run practical prediction for a new student.
+## Version 2.0
 
-## Repository Description
+Compared with the initial public version, v2.0 introduces:
 
-**Streamlit-based machine learning project for student performance evaluation using ensemble methods, including preprocessing, visualization, Bayesian optimization, voting, stacking, strategy comparison, and practical prediction for new student records.**
+- refactoring from a flat module structure to `app_pages/` and `utils/` packages;
+- separated core logic, UI, constants, reports, and state management;
+- a dedicated statistical analysis stage;
+- test-set fingerprinting and per-object prediction export;
+- confidence interval estimation;
+- McNemar tests and Holm multiple-comparison correction;
+- paired bootstrap comparison of model metrics;
+- expanded cross-strategy analysis and prediction workflow.
+
+## Intended Use
+
+This project is intended for academic, research, and demonstration purposes in student performance modeling and ensemble machine learning.
 
 ## Author
 
-**Valeriia Savenko**
-
-## License
-
-This project is intended for academic and research purposes.
+Valeriia Savenko
